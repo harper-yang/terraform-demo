@@ -1,16 +1,8 @@
-provider "aws" {
-  region = "ap-southeast-2"
-}
-
 resource "aws_launch_configuration" "example" {
   image_id      = "ami-0fed0634ee3607ed9"
   instance_type = "t2.micro"
-
-  user_data = <<-EOF
-    #!/bin/bash
-    echo "Hello, World" > index.html
-    nohup busybox httpd -f -p ${var.server_port} &
-  EOF
+  security_groups = [aws_security_group.alb.id]
+  user_data = data.template_file.user_data.rendered
 
   lifecycle {
     create_before_destroy = true
@@ -30,7 +22,7 @@ resource "aws_autoscaling_group" "asg_example" {
   tag {
     key                 = "Name"
     propagate_at_launch = true
-    value               = "terraform-asg-example"
+    value               = "${var.cluster_name}-asg"
   }
 }
 
@@ -46,7 +38,7 @@ data "aws_subnets" "default" {
 }
 
 resource "aws_lb" "example" {
-  name               = "terraform-asg-example"
+  name               = "${var.cluster_name}-asg"
   load_balancer_type = "application"
   subnets            = data.aws_subnets.default.ids
   security_groups = [aws_security_group.alb.id]
@@ -69,7 +61,7 @@ resource "aws_lb_listener" "http" {
 }
 
 resource "aws_lb_target_group" "asg" {
-  name     = "terraform-asg-example"
+  name     = "${var.cluster_name}-asg"
   port     = var.server_port
   protocol = "HTTP"
   vpc_id   = data.aws_vpc.default.id
@@ -102,7 +94,7 @@ resource "aws_lb_listener_rule" "asg" {
 }
 
 resource "aws_security_group" "alb" {
-  name = "terraform-example-alb"
+  name = "${var.cluster_name}-alb"
 
   ingress {
     from_port = 80
@@ -119,13 +111,17 @@ resource "aws_security_group" "alb" {
   }
 }
 
-variable "server_port" {
-  description = "The port"
-  type        = number
-  default     = 8080
+data "terraform_remote_state" "db" {
+  backend = "file"
+
+  config = {
+    path = "${var.remote_db_state_path}/terraform.tfstate"
+  }
 }
 
-output "alb_dns_name" {
-  value = aws_lb.example.dns_name
-  description = "The domain of the load balancer"
+data "template_file" "user_data" {
+  template = file("user_data.sh")
+  vars = {
+    db_address = data.terraform_remote_state.db.outputs.address
+  }
 }
